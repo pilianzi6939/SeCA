@@ -1,0 +1,216 @@
+theory Provers_and_Provers 
+begin
+
+builtins: asymmetric-encryption, signing
+
+/*
+   Protocol between ProverI and ProverJ
+ */
+functions:
+  
+  hash/4     
+
+// Public key infrastructure
+rule Register_pk:
+  [ Fr(~ltkA) ]
+ --[Register($A, ~ltkA)]->
+  [ !Ltk($A, ~ltkA), !Pk($A, pk(~ltkA)), Out(pk(~ltkA)) ]
+
+rule Reveal_ltk:
+  [ !Ltk(A, ltkA) ] --[ Revltk(A)  ]-> [ Out(ltkA) ]
+
+
+rule Generate_shared_key:
+      [Fr(~k),
+      !Pk($ProverI, pkProverI),
+      !Pk($ProverJ, pkProverJ)]
+      --[Generatekey(pkProverI,pkProverJ,~k)]->
+      [
+      !Ltksys($ProverI,$ProverJ,pkProverI,pkProverJ,~k)
+      ]
+
+rule Reveal_k:
+      [!Ltksys($ProverI,$ProverJ,pkProverI,pkProverJ,k)]
+        --[Revk($ProverI,$ProverJ)]->
+      [Out(k)]
+
+rule ProverI_step1:
+  let m1 = <~Ni,~time_I,~pid,hash(~k,~Ni,~time_I,~pid),sign(~time_I,ltk_ProverI)>
+  in
+    [ Fr(~time_I),
+    Fr(~pid),
+    Fr(~Ni),
+    !Ltk($ProverI, ltk_ProverI),
+     !Ltksys($ProverI,$ProverJ,pkProverI,pkProverJ,~k)
+    ]
+  --[ 
+      Step1(),
+      Running($ProverI, $ProverJ, <'Ni',~Ni>),
+      Running($ProverI, $ProverJ, <'pid',~pid>),
+      Running($ProverI, $ProverJ, <'time_I',~time_I>)
+    ]->
+    [ Out( m1 ),
+     St_ProverI_1($ProverI, $ProverJ, ~Ni,~time_I,~pid)
+    ]
+
+rule ProverJ_step2:
+  let m1 = <~Ni,~time_I,~pid,hash(~k,~Ni,~time_I,~pid),s2>
+      m2 = <~nr,~time_R,hash(~k,~nr,~time_R,~pid),sign(~time_R,ltk_ProverJ)>
+  in
+    [ !Ltk($ProverJ, ltk_ProverJ),
+     In( m1 ),
+     !Ltksys($ProverI,$ProverJ,pkProverI,pkProverJ,~k),
+     Fr(~nr),
+    Fr(~time_R)
+    ]
+  --[ 
+     Step2(),
+    Eq(verify(s2,~time_I,pkProverI),true),
+    Commit($ProverJ, $ProverI, <'Ni',~Ni>),
+    Commit($ProverJ, $ProverI, <'pid',~pid>),
+    Commit($ProverJ, $ProverI, <'time_I',~time_I>),
+    Running($ProverJ, $ProverI, <'time_R',~time_R>),
+    Running($ProverJ, $ProverI, <'nr',~nr>)
+    ]->
+    [ Out( m2 ),
+    St_ProverJ_1($ProverI, $ProverJ, ~time_I, ~pid, ~time_R, ~nr)
+    ]
+
+rule ProverI_step3:
+  let m2 = <~nr,~time_R,hash(~k,~nr,~time_R,~pid),s3>
+  in
+    [St_ProverI_1($ProverI, $ProverJ, ~Ni,~time_I,~pid),
+     In( m2 ),
+    !Ltksys($ProverI,$ProverJ,pkProverI,pkProverJ,~k)
+    ]
+  --[ Step3(),
+      Eq(verify(s3,~time_R,pkProverJ),true),
+     Commit ($ProverI, $ProverJ, <'time_R',~time_R>),
+     Commit ($ProverI, $ProverJ, <'nr',~nr>)  
+    ]->
+    []
+
+
+restriction Equality:
+"All x y #i. Eq(x,y) @i ==> x = y"
+
+restriction register_once:
+  " All ltk1 ltk2 A #i #j. Register(A, ltk1)@i & Register(A, ltk2)@j ==> (#i = #j & ltk1 = ltk2)"
+
+restriction Generatekey_two_different_party:
+  " All pkProverI pkProverJ k #i. Generatekey(pkProverI,pkProverJ,k)@i  ==> not (pkProverI = pkProverJ)"
+restriction Generatekey_once:
+  " All pkProverI pkProverJ k1 k2 #i #j. Generatekey(pkProverI,pkProverJ,k1)@i  & Generatekey(pkProverI,pkProverJ,k2)@j==> (#i = #j & k1 = k2)"
+
+lemma executability:
+  exists-trace
+  " Ex   #i #j #k. Step3()@i 
+  & Step2()@j 
+  & Step1()@k
+    & #k < #j  
+    & #j < #i 
+    & not (Ex X  #r. Revltk(X)@r)
+    & not (Ex ProverI ProverJ  #r. Revk(ProverI,ProverJ)@r)
+    "
+lemma Aliveness_ProverI_ProverJ:
+  " 
+    All ProverI ProverJ time_R  #i.
+        Commit(ProverI, ProverJ, <'time_R',time_R>) @ i
+      ==>
+          (Ex Proverk t #j. Running(ProverJ, Proverk, <'time_R',t>) @ j & j < i
+          )
+        | (Ex #r. Revltk(ProverJ)  @ r)
+        |(Ex #r. Revk(ProverI, ProverJ)  @ r)
+  "
+
+  lemma Weak_agree_ProverI_ProverJ:
+  " 
+    All ProverI ProverJ time_R  #i.
+        Commit(ProverI, ProverJ, <'time_R',time_R>) @ i
+      ==>
+          (Ex t #j. Running(ProverJ, ProverI, <'time_R',t>) @ j & j < i
+          )
+        | (Ex #r. Revltk(ProverJ)  @ r)
+        |(Ex #r. Revk(ProverI, ProverJ)  @ r)
+  "
+  lemma Noninjective_agree_time_R_ProverI_ProverJ:
+  " 
+    All ProverI ProverJ time_R  #i.
+        Commit(ProverI, ProverJ, <'time_R',time_R>) @ i
+      ==>
+          (Ex #j. Running(ProverJ, ProverI, <'time_R',time_R>) @ j & j < i
+          )
+        | (Ex #r. Revltk(ProverJ)  @ r)
+        |(Ex #r. Revk(ProverI, ProverJ)  @ r)
+  "
+
+lemma Noninjective_agree_Nr_ProverI_ProverJ:
+  " 
+    All ProverI ProverJ nr #i.
+        Commit(ProverI, ProverJ, <'nr', nr>) @ i
+      ==>
+          (Ex #j. Running(ProverJ, ProverI, <'nr', nr>) @ j & j < i
+          )
+        | (Ex #r. Revltk(ProverJ)  @ r)
+        |(Ex #r. Revk(ProverI, ProverJ)  @ r)
+  "
+
+
+lemma Aliveness_ProverJ_ProverI:
+  "
+    All ProverI ProverJ Ni #i.
+        Commit(ProverJ, ProverI, <'Ni',Ni>) @ i
+      ==>
+          (Ex Proverk t #j. Running(ProverI, Proverk, <'Ni',t>) @ j & j < i
+          )
+        | (Ex #r. Revltk(ProverI)  @ r)
+        | (Ex #r. Revk(ProverI, ProverJ)  @ r)
+  "
+lemma Weak_agree_ProverJ_ProverI:
+  "
+    All ProverI ProverJ Ni  #i.
+        Commit(ProverJ, ProverI, <'Ni',Ni>) @ i
+      ==>
+          (Ex t #j. Running(ProverI, ProverJ, <'Ni',t>) @ j & j < i
+          )
+        | (Ex #r. Revltk(ProverI)  @ r)
+        |(Ex #r. Revk(ProverI, ProverJ)  @ r)
+  "
+
+lemma Noninjective_agree_Ni_ProverJ_ProverI:
+  "
+    All ProverI ProverJ Ni  #i.
+        Commit(ProverJ, ProverI, <'Ni',Ni>) @ i
+      ==>
+          (Ex #j. Running(ProverI, ProverJ, <'Ni',Ni>) @ j & j < i
+          )
+        | (Ex #r. Revltk(ProverI)  @ r)
+        |(Ex #r. Revk(ProverI, ProverJ)  @ r)
+  "
+
+lemma Noninjective_agree_pid_ProverJ_ProverI:
+  "
+    All ProverI ProverJ  pid  #i.
+        Commit(ProverJ, ProverI, <'pid',pid>) @ i
+      ==>
+          (Ex #j. Running(ProverI, ProverJ, <'pid',pid>) @ j & j < i
+          )
+        | (Ex #r. Revltk(ProverI)  @ r)
+        |(Ex #r. Revk(ProverI, ProverJ)  @ r)
+  "
+
+lemma Noninjective_agree_time_I_ProverJ_ProverI:
+  "
+    All ProverI ProverJ time_I  #i.
+        Commit(ProverJ, ProverI, <'time_I',time_I>) @ i
+      ==>
+          (Ex #j. Running(ProverI, ProverJ, <'time_I',time_I>) @ j & j < i
+          )
+        | (Ex #r. Revltk(ProverI)  @ r)
+        |(Ex #r. Revk(ProverI, ProverJ)  @ r)
+  "
+
+
+
+
+end

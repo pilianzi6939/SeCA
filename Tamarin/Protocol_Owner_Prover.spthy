@@ -1,0 +1,153 @@
+theory Owners_and_Provers
+begin
+
+builtins: asymmetric-encryption, signing
+functions:
+  
+  hash/4 
+/*
+   Protocol between Owner and Prover
+ */
+    
+
+// Public key infrastructure
+rule Proveregister_pk:
+  [ Fr(~ltkA) ]
+  --[Register($A, ~ltkA)]->
+  [ !Ltk($A, ~ltkA), !Pk($A, pk(~ltkA)), Out(pk(~ltkA)) ]
+
+rule Provereveal_ltk:
+  [ !Ltk(A, ltkA) ] --[ Revltk(A)    ]-> [ Out(ltkA) ]
+
+rule Generate_shared_key:
+[Fr(~k),
+!Pk($Owner, pkOwner),
+!Pk($Prover, pkProver)
+]
+--[Generatekey(pkOwner,pkProver,~k)]->
+[!Ltksys($Owner,$Prover,pkOwner,pkProver,~k)]
+
+rule Reveal_k:
+      [!Ltksys($Owner,$Prover,pkOwner,pkProver,k)]
+        --[Revk($Owner,$Prover)]->
+      [Out(k)]
+
+rule Owner_1:
+  let m1 = <~time_I,~pid,sign(<~time_I,~pid>,ltk_Owner),sign(~time_I,ltk_Owner)>
+  in
+    [ Fr(~time_I),
+    Fr(~pid),
+    !Ltk($Owner, ltk_Owner),
+     !Pk($Prover, pkProver)
+    ]
+  --[ 
+  Step1(),
+  Running($Owner, $Prover, <'param1',~pid,~time_I>)
+    ]->
+    [ Out( m1 ),
+      St_Owner_1($Owner, $Prover, ~time_I,~pid)
+    ]
+
+rule Prover_1:
+  let m1 = <~time_I,~pid,s1,s2>
+      m2 = <~nr,~time_R,hash(~k,~nr,~time_R,~pid),sign(~time_R,ltk_Prover)>
+  in
+    [ !Ltk($Prover, ltk_Prover),
+      In( m1 ),
+      !Ltksys($Owner,$Prover,pkOwner,pkProver,~k),
+      Fr(~nr),
+      Fr(~time_R)
+    ]
+  --[ Step2(),
+      Eq(verify(s1,<~time_I,~pid>,pkOwner),true),
+      Eq(verify(s2,~time_I,pkOwner),true),
+      Commit($Prover, $Owner, <'param1',~pid,~time_I>),
+      Running($Prover, $Owner, <'time_R',~time_R,~nr>),
+       Running($Prover, $Owner, <'nr',~nr>)
+    ]->
+    [ Out( m2 ),
+      St_Prover_1($Prover, $Owner, ~time_I, ~pid, ~time_R, ~nr)
+    ]
+
+rule Owner_2:
+  let m2 = <~nr,~time_R,hash(~k,~nr,~time_R,~pid),s3>
+  in
+    [ St_Owner_1($Owner, $Prover, ~time_I,~pid),
+      In( m2 ),
+    !Ltksys($Owner,$Prover,pkOwner,pkProver,~k)
+    ]
+  --[ Step3(),
+      Eq(verify(s3,~time_R,pkProver),true),
+      Commit ($Owner, $Prover, <'time_R',~time_R,~nr>),
+      Commit ($Owner, $Prover, <'nr',~nr>) 
+    ]->
+    [ ]
+
+
+restriction Equality:
+"All x y #i. Eq(x,y) @i ==> x = y"
+
+restriction register_once:
+  " All ltk1 ltk2 A #i #j. Register(A, ltk1)@i & Register(A, ltk2)@j ==> (#i = #j & ltk1 = ltk2)"
+
+restriction Generatekey_two_different_party:
+  " All pkOwner pkProver k #i. Generatekey(pkOwner,pkProver,k)@i  ==> not (pkOwner=pkProver)"
+restriction Generatekey_once:
+  " All pkOwner pkProver k1 k2 #i #j. Generatekey(pkOwner,pkProver,k1)@i  & Generatekey(pkOwner,pkProver,k2)@j==> (#i = #j & k1 = k2)"
+
+lemma executability:
+  exists-trace
+  " Ex #i #j #k. Step3()@i 
+  & Step2()@j 
+  & Step1()@k
+    & #k < #j  
+    & #j < #i 
+    & not (Ex X  #r. Revltk(X)@r)
+     & not (Ex Owner  Prover  #r. Revk(Owner,Prover)@r)
+    "
+
+lemma Aliveness_Owner_Prover:
+  "
+      All Owner Prover time_R  #i.
+        Commit(Owner, Prover, <'time_R',time_R>) @ i
+      ==>
+          (Ex Owner1 t1  #j. Running(Prover, Owner1, <'time_R',t1>) @ j & j < i
+          )
+        | (Ex #r. Revltk(Prover)  @ r)
+        |  (Ex Owner  Prover  #r. Revk(Owner,Prover)@r)
+  "
+lemma Weak_agree_Owner_Prover:
+  "
+      All Owner Prover time_R  #i.
+        Commit(Owner, Prover, <'time_R',time_R>) @ i
+      ==>
+          (Ex t1  #j. Running(Prover, Owner, <'time_R',t1>) @ j & j < i
+          )
+        | (Ex #r. Revltk(Prover)  @ r)
+        |  (Ex Owner  Prover  #r. Revk(Owner,Prover)@r)
+  "
+lemma Noninjective_agree_time_R_Owner_Prover:
+  "
+      All Owner Prover time_R  #i.
+        Commit(Owner, Prover, <'time_R',time_R>) @ i
+      ==>
+          (Ex #j. Running(Prover, Owner, <'time_R',time_R>) @ j & j < i
+          )
+        | (Ex #r. Revltk(Prover)  @ r)
+        |  (Ex Owner  Prover  #r. Revk(Owner,Prover)@r)
+  "
+lemma Noninjective_agree_Nr_Owner_Prover:
+  "
+      All Owner Prover  nr #i.
+        Commit(Owner, Prover, <'nr',nr>) @ i
+      ==>
+          (Ex #j. Running(Prover, Owner, <'nr',nr>) @ j & j < i
+          )
+        | (Ex #r. Revltk(Prover)  @ r)
+        |  (Ex Owner  Prover  #r. Revk(Owner,Prover)@r)
+  "
+
+
+
+
+end
